@@ -1,21 +1,28 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:madaure/main.dart';
-import 'package:madaure/screens/auth_wrapper.dart';
-import 'add_delivery_screen.dart';
-import 'add_school_screen.dart';
-import 'add_payment_screen.dart';
+import 'package:madaure/models/user.dart';
 
-class DistributorDashboardScreen extends StatefulWidget {
-  const DistributorDashboardScreen({super.key});
+class AdminDashboardScreen extends StatefulWidget {
+  final User? user;
+
+  const AdminDashboardScreen({super.key, this.user});
 
   @override
-  State<DistributorDashboardScreen> createState() => _DistributorDashboardScreenState();
+  State<AdminDashboardScreen> createState() => _AdminDashboardScreenState();
 }
 
-class _DistributorDashboardScreenState extends State<DistributorDashboardScreen> {
+class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   Map<String, dynamic>? _dashboardData;
+  Map<String, dynamic>? _overviewData;
+  Map<String, dynamic>? _wilayaStats;
+  Map<String, dynamic>? _topDistributors;
+  Map<String, dynamic>? _topSchools;
+
   bool _isLoading = true;
   String? _errorMessage;
+  String _selectedPeriod = 'month';
+  int _selectedTab = 0;
 
   @override
   void initState() {
@@ -24,182 +31,56 @@ class _DistributorDashboardScreenState extends State<DistributorDashboardScreen>
   }
 
   Future<void> _loadDashboardData() async {
+    if (!mounted) return;
+
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
 
-    print('🔄 Chargement des données du dashboard...');
-
     try {
-      // Test d'authentification
-      await apiService.initToken();
-      print('🔑 Token présent: ${apiService.isAuthenticated}');
+      // Charger les données principales du dashboard admin
+      final dashboard = await apiService.fetchAdminDashboard();
 
-      if (!apiService.isAuthenticated) {
-        throw Exception('Utilisateur non authentifié. Veuillez vous reconnecter.');
+      // Charger les statistiques supplémentaires en parallèle
+      final List<Future> futures = [
+        apiService.fetchAdminOverview(),
+        apiService.fetchWilayaStats(),
+        apiService.fetchTopDistributors(),
+        apiService.fetchTopSchools(),
+      ];
+
+      final results = await Future.wait(futures, eagerError: true);
+
+      if (mounted) {
+        setState(() {
+          _dashboardData = dashboard;
+          _overviewData = results[0];
+          _wilayaStats = results[1];
+          _topDistributors = results[2];
+          _topSchools = results[3];
+          _isLoading = false;
+        });
       }
-
-      print('📊 Appel API pour le dashboard...');
-      final data = await apiService.fetchDistributorDashboard();
-      print('✅ Données reçues avec succès');
-      print('📦 Clés des données: ${data.keys.toList()}');
-
-      setState(() {
-        _dashboardData = data;
-        _isLoading = false;
-      });
     } catch (e) {
-      print('❌ Erreur de chargement du dashboard: $e');
+      if (mounted) {
+        setState(() {
+          _errorMessage = e.toString();
+          _isLoading = false;
+        });
 
-      String errorMessage = 'Impossible de charger les données';
-
-      // Messages d'erreur plus conviviaux
-      if (e.toString().contains('Connection refused') ||
-          e.toString().contains('Failed host lookup')) {
-        errorMessage = 'Serveur inaccessible. Vérifiez votre connexion.';
-      } else if (e.toString().contains('401') ||
-          e.toString().contains('Unauthenticated') ||
-          e.toString().contains('token')) {
-        errorMessage = 'Session expirée. Veuillez vous reconnecter.';
-
-        // Déconnexion automatique
-        await apiService.logout();
-        if (mounted) {
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (context) => const AuthWrapper()),
-                (Route<dynamic> route) => false,
+        // Gestion des erreurs d'autorisation
+        if (e.toString().contains('403') || e.toString().contains('Forbidden')) {
+          // L'utilisateur n'a pas les permissions admin
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Vous n\'avez pas les permissions administrateur'),
+              backgroundColor: Colors.red,
+            ),
           );
-          return;
         }
       }
-
-      setState(() {
-        _errorMessage = errorMessage;
-        _isLoading = false;
-      });
     }
-  }
-
-  void _onLogout() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Déconnexion'),
-        content: const Text('Êtes-vous sûr de vouloir vous déconnecter ?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Annuler'),
-          ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await apiService.logout();
-              if (mounted) {
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (context) => const AuthWrapper()),
-                      (Route<dynamic> route) => false,
-                );
-              }
-            },
-            child: const Text('Déconnexion', style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Mon Tableau de Bord'),
-        backgroundColor: Colors.blue.shade700,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadDashboardData,
-            tooltip: 'Rafraîchir',
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: _onLogout,
-            tooltip: 'Déconnexion',
-          ),
-        ],
-      ),
-      body: _buildBody(),
-      floatingActionButton: _buildFAB(),
-    );
-  }
-
-  Widget _buildBody() {
-    if (_isLoading) {
-      return _buildLoadingScreen();
-    }
-
-    if (_errorMessage != null) {
-      return _buildErrorScreen();
-    }
-
-    if (_dashboardData == null) {
-      return _buildEmptyScreen();
-    }
-
-    final data = _dashboardData!;
-
-    // Extraction sécurisée des données
-    final Map<String, dynamic> distributorInfo = data['distributor'] is Map
-        ? Map<String, dynamic>.from(data['distributor'])
-        : {};
-
-    final String distributorName = distributorInfo['name']?.toString() ?? 'Distributeur';
-    final String distributorWilaya = distributorInfo['wilaya']?.toString() ?? 'Non spécifiée';
-
-    final int totalOrders = _safeParseInt(data['totalOrders']);
-    final int pendingDeliveries = _safeParseInt(data['pendingDeliveries']);
-    final int completedToday = _safeParseInt(data['completedToday']);
-    final double totalRevenue = _safeParseDouble(data['totalRevenue']);
-    final double totalPaid = _safeParseDouble(data['totalPaid']);
-    final double remainingAmount = _safeParseDouble(data['remainingAmount']);
-    final int monthlyDeliveries = _safeParseInt(data['monthlyDeliveries']);
-    final double monthlyRevenue = _safeParseDouble(data['monthlyRevenue']);
-    final int assignedSchools = _safeParseInt(data['assignedSchools']);
-
-    final List<dynamic> recentOrders = data['recentOrders'] is List
-        ? List<dynamic>.from(data['recentOrders'])
-        : [];
-
-    return RefreshIndicator(
-      onRefresh: _loadDashboardData,
-      child: ListView(
-        padding: const EdgeInsets.all(16.0),
-        children: [
-          // Carte de bienvenue
-          _buildWelcomeCard(distributorName, distributorWilaya),
-          const SizedBox(height: 20),
-
-          // Carte de synthèse financière
-          _buildBalanceCard(totalRevenue, totalPaid, remainingAmount),
-          const SizedBox(height: 20),
-
-          // Grille de statistiques
-          _buildStatsGrid(
-            totalOrders: totalOrders,
-            pendingDeliveries: pendingDeliveries,
-            completedToday: completedToday,
-            monthlyDeliveries: monthlyDeliveries,
-            monthlyRevenue: monthlyRevenue,
-            assignedSchools: assignedSchools,
-          ),
-          const SizedBox(height: 20),
-
-          // Commandes récentes
-          _buildRecentOrders(recentOrders),
-        ],
-      ),
-    );
   }
 
   Widget _buildLoadingScreen() {
@@ -209,10 +90,7 @@ class _DistributorDashboardScreenState extends State<DistributorDashboardScreen>
         children: [
           CircularProgressIndicator(),
           SizedBox(height: 20),
-          Text(
-            'Chargement du tableau de bord...',
-            style: TextStyle(fontSize: 16, color: Colors.blue),
-          ),
+          Text('Chargement du tableau de bord admin...'),
         ],
       ),
     );
@@ -220,200 +98,277 @@ class _DistributorDashboardScreenState extends State<DistributorDashboardScreen>
 
   Widget _buildErrorScreen() {
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline, color: Colors.red, size: 60),
-            const SizedBox(height: 20),
-            Text(
-              'Erreur de chargement',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(color: Colors.red),
-            ),
-            const SizedBox(height: 10),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0),
-              child: Text(
-                _errorMessage!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.grey),
-              ),
-            ),
-            const SizedBox(height: 30),
-            ElevatedButton.icon(
-              onPressed: _loadDashboardData,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Réessayer'),
-            ),
-            const SizedBox(height: 20),
-            OutlinedButton.icon(
-              onPressed: () {
-                Navigator.of(context).pushAndRemoveUntil(
-                  MaterialPageRoute(builder: (context) => const AuthWrapper()),
-                      (route) => false,
-                );
-              },
-              icon: const Icon(Icons.login),
-              label: const Text('Retour à la connexion'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildEmptyScreen() {
-    return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.info_outline, color: Colors.blue, size: 60),
+          const Icon(Icons.error_outline, size: 60, color: Colors.red),
           const SizedBox(height: 20),
-          const Text(
-            'Aucune donnée disponible',
-            style: TextStyle(fontSize: 18, color: Colors.blue),
+          Text(
+            'Erreur de chargement',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(color: Colors.red),
           ),
           const SizedBox(height: 10),
-          const Text(
-            'Veuillez rafraîchir ou vérifier votre connexion',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Text(
+              _errorMessage ?? 'Une erreur est survenue',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.grey),
+            ),
           ),
-          const SizedBox(height: 30),
-          ElevatedButton.icon(
+          const SizedBox(height: 20),
+          ElevatedButton(
             onPressed: _loadDashboardData,
-            icon: const Icon(Icons.refresh),
-            label: const Text('Rafraîchir'),
+            child: const Text('Réessayer'),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildWelcomeCard(String name, String wilaya) {
-    return Card(
-      elevation: 4,
-      child: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Row(
-          children: [
-            const CircleAvatar(
-              radius: 30,
-              backgroundColor: Colors.blue,
-              child: Icon(Icons.person, color: Colors.white, size: 30),
-            ),
-            const SizedBox(width: 15),
-            Expanded(
-              child: Column(
+  Widget _buildDashboardHeader() {
+    // Utilisez widget.user ou les données du dashboard
+    final user = widget.user;
+    final stats = _dashboardData?['statistics'] ?? {};
+    final dashboardUser = _dashboardData?['user'] ?? {};
+
+    // Priorité: 1. widget.user, 2. dashboard data, 3. valeurs par défaut
+    final String userName = user?.name ?? dashboardUser['name'] ?? 'Administrateur';
+    final String userEmail = user?.email ?? dashboardUser['email'] ?? '';
+    final String userRole = user?.role ?? dashboardUser['role'] ?? 'admin';
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Colors.purple.shade800, Colors.purple.shade600],
+        ),
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(25),
+          bottomRight: Radius.circular(25),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Bienvenue, $name!',
-                    style: const TextStyle(
-                      fontSize: 18,
+                  const Text(
+                    'Tableau de Bord Administrateur',
+                    style: TextStyle(
+                      fontSize: 20,
                       fontWeight: FontWeight.bold,
+                      color: Colors.white,
                     ),
                   ),
                   const SizedBox(height: 5),
                   Text(
-                    'Wilaya: $wilaya',
-                    style: TextStyle(color: Colors.grey.shade600),
+                    'Bienvenue, $userName',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.white.withOpacity(0.9),
+                    ),
                   ),
-                  const SizedBox(height: 5),
+                  if (userEmail.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      'Email: $userEmail',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white.withOpacity(0.8),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 3),
                   Text(
-                    'Date: ${_formatDate(DateTime.now())}',
-                    style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    'Rôle: ${userRole.toUpperCase()}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.white.withOpacity(0.7),
+                      fontStyle: FontStyle.italic,
+                    ),
                   ),
                 ],
               ),
-            ),
-            IconButton(
-              icon: const Icon(Icons.info, color: Colors.blue),
-              onPressed: () {
-                showDialog(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('Informations'),
-                    content: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Nom: $name'),
-                        Text('Wilaya: $wilaya'),
-                        Text('Dernière mise à jour: ${DateTime.now().toString()}'),
-                      ],
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('OK'),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBalanceCard(double totalRevenue, double totalPaid, double remainingAmount) {
-    final Color remainingColor = remainingAmount > 0 ? Colors.red.shade700 : Colors.green.shade700;
-
-    return Card(
-      elevation: 4,
-      child: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Row(
-              children: [
-                Icon(Icons.account_balance_wallet, color: Colors.blue),
-                SizedBox(width: 10),
-                Text(
-                  'Synthèse Financière',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              CircleAvatar(
+                radius: 30,
+                backgroundColor: Colors.white.withOpacity(0.2),
+                child: const Icon(
+                  Icons.admin_panel_settings,
+                  size: 30,
+                  color: Colors.white,
                 ),
-              ],
-            ),
-            const Divider(),
-            _buildStatRow('Total Livré', totalRevenue, Colors.green.shade700),
-            _buildStatRow('Total Payé', totalPaid, Colors.teal.shade700),
-            _buildStatRow(
-              'Solde Restant',
-              remainingAmount,
-              remainingColor,
-              isLarge: true,
-            ),
-          ],
-        ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          _buildAdminStatsCard(stats), // Notez le point-virgule ici
+        ],
       ),
     );
   }
 
-  Widget _buildStatRow(String label, double value, Color color, {bool isLarge = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  Widget _buildAdminStatsCard(Map<String, dynamic> stats) {
+    final NumberFormat formatter = NumberFormat('#,###');
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(15),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 10,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: Column(
         children: [
-          Text(
-            label,
+          const Text(
+            'VUE D\'ENSEMBLE',
             style: TextStyle(
-              fontSize: isLarge ? 16 : 14,
-              fontWeight: isLarge ? FontWeight.bold : FontWeight.normal,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey,
+              letterSpacing: 1,
             ),
           ),
-          Text(
-            '${value.toStringAsFixed(2)} DZD',
+          const SizedBox(height: 15),
+          GridView.count(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisCount: 2,
+            childAspectRatio: 1.5,
+            crossAxisSpacing: 15,
+            mainAxisSpacing: 15,
+            children: [
+              _buildAdminStatItem('Écoles', '${stats['total_schools'] ?? 0}', Icons.school, Colors.blue),
+              _buildAdminStatItem('Distributeurs', '${stats['total_distributors'] ?? 0}', Icons.people, Colors.green),
+              _buildAdminStatItem('Livraisons', '${stats['total_deliveries'] ?? 0}', Icons.local_shipping, Colors.orange),
+              _buildAdminStatItem('Revenu Total', '${formatter.format(stats['total_revenue'] ?? 0)}', Icons.attach_money, Colors.purple),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAdminStatItem(String label, String value, IconData icon, Color color) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: color, size: 24),
+            const SizedBox(height: 8),
+            Text(
+              value,
+              style: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOverviewTab() {
+    final overview = _overviewData?['overview'] ?? {};
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Statistiques Globales',
             style: TextStyle(
-              fontSize: isLarge ? 18 : 16,
+              fontSize: 18,
               fontWeight: FontWeight.bold,
-              color: color,
+            ),
+          ),
+          const SizedBox(height: 15),
+          _buildStatCard(
+            'Taux de Couverture GPS',
+            '${overview['coverage_percentage']?.toStringAsFixed(1) ?? '0'}%',
+            Icons.gps_fixed,
+            Colors.teal,
+          ),
+          const SizedBox(height: 10),
+          _buildStatCard(
+            'Revenu Mensuel',
+            '${NumberFormat('#,###').format(overview['monthly_revenue'] ?? 0)} DZD',
+            Icons.trending_up,
+            Colors.green,
+          ),
+          const SizedBox(height: 10),
+          _buildStatCard(
+            'Livraisons ce Mois',
+            '${overview['monthly_deliveries'] ?? 0}',
+            Icons.calendar_today,
+            Colors.blue,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatCard(String title, String value, IconData icon, Color color) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 30),
+          const SizedBox(width: 15),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -421,244 +376,89 @@ class _DistributorDashboardScreenState extends State<DistributorDashboardScreen>
     );
   }
 
-  Widget _buildStatsGrid({
-    required int totalOrders,
-    required int pendingDeliveries,
-    required int completedToday,
-    required int monthlyDeliveries,
-    required double monthlyRevenue,
-    required int assignedSchools,
-  }) {
-    return GridView.count(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: 2,
-      crossAxisSpacing: 10,
-      mainAxisSpacing: 10,
-      childAspectRatio: 1.2,
-      children: [
-        _buildMiniStatCard('Total Commandes', totalOrders.toString(), Icons.shopping_cart, Colors.indigo),
-        _buildMiniStatCard('En Attente', pendingDeliveries.toString(), Icons.pending, Colors.orange),
-        _buildMiniStatCard('Aujourd\'hui', completedToday.toString(), Icons.today, Colors.green),
-        _buildMiniStatCard('Mensuel', monthlyDeliveries.toString(), Icons.calendar_month, Colors.blue),
-        _buildMiniStatCard('Revenu Mensuel', '${monthlyRevenue.toStringAsFixed(2)} DZD', Icons.monetization_on, Colors.purple),
-        _buildMiniStatCard('Écoles', assignedSchools.toString(), Icons.school, Colors.teal),
-      ],
-    );
-  }
+  Widget _buildWilayaStatsTab() {
+    final wilayas = _wilayaStats?['wilaya_stats'] ?? [];
 
-  Widget _buildMiniStatCard(String title, String value, IconData icon, Color color) {
-    return Card(
-      elevation: 2,
-      child: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: color, size: 30),
-            const SizedBox(height: 8),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              value,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: color,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildRecentOrders(List<dynamic> recentOrders) {
-    return Card(
-      elevation: 4,
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Row(
-              children: [
-                Icon(Icons.history, color: Colors.blue),
-                SizedBox(width: 10),
-                Text(
-                  'Activité Récente',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            const Divider(),
-            if (recentOrders.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(20.0),
-                child: Center(
-                  child: Text(
-                    'Aucune activité récente',
-                    style: TextStyle(color: Colors.grey, fontStyle: FontStyle.italic),
-                  ),
-                ),
-              )
-            else
-              ...recentOrders.take(5).map((order) => _buildOrderItem(order)).toList(),
-            if (recentOrders.length > 5)
-              Padding(
-                padding: const EdgeInsets.only(top: 10.0),
-                child: Align(
-                  alignment: Alignment.center,
-                  child: TextButton(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Fonctionnalité de liste complète à venir'),
-                          duration: Duration(seconds: 2),
-                        ),
-                      );
-                    },
-                    child: const Text('Voir tout'),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOrderItem(dynamic order) {
-    final Map<String, dynamic> orderData = order is Map<String, dynamic>
-        ? Map<String, dynamic>.from(order)
-        : {};
-
-    final customer = orderData['customer']?.toString() ?? 'Client';
-    final status = orderData['status']?.toString() ?? 'Inconnu';
-    final amount = _safeParseDouble(orderData['amount']);
-    final date = orderData['date']?.toString() ?? 'Date inconnue';
-    final quantity = _safeParseInt(orderData['quantity']);
-
-    Color statusColor = Colors.grey;
-    IconData statusIcon = Icons.info;
-    String statusText = status;
-
-    switch (status.toLowerCase()) {
-      case 'completed':
-      case 'livré':
-      case 'terminé':
-        statusColor = Colors.green;
-        statusIcon = Icons.check_circle;
-        statusText = 'Terminé';
-        break;
-      case 'pending':
-      case 'en attente':
-        statusColor = Colors.orange;
-        statusIcon = Icons.pending;
-        statusText = 'En attente';
-        break;
-      case 'in_progress':
-      case 'en cours':
-        statusColor = Colors.blue;
-        statusIcon = Icons.local_shipping;
-        statusText = 'En cours';
-        break;
-      case 'cancelled':
-      case 'annulé':
-        statusColor = Colors.red;
-        statusIcon = Icons.cancel;
-        statusText = 'Annulé';
-        break;
+    if (wilayas.isEmpty) {
+      return const Center(
+        child: Text('Aucune donnée disponible'),
+      );
     }
 
-    return ListTile(
-      leading: Icon(statusIcon, color: statusColor),
-      title: Text(customer),
-      subtitle: Text('$date • $quantity unités • ${amount.toStringAsFixed(2)} DZD'),
-      trailing: Chip(
-        label: Text(statusText, style: const TextStyle(fontSize: 12, color: Colors.white)),
-        backgroundColor: statusColor,
-        visualDensity: VisualDensity.compact,
-      ),
-      onTap: () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Détails: $customer - $statusText'),
-            duration: const Duration(seconds: 2),
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: wilayas.length,
+      itemBuilder: (context, index) {
+        final wilaya = wilayas[index];
+        return ListTile(
+          leading: CircleAvatar(
+            backgroundColor: Colors.blue.shade100,
+            child: Text(
+              '${index + 1}',
+              style: const TextStyle(color: Colors.blue),
+            ),
+          ),
+          title: Text(wilaya['wilaya'] ?? 'Inconnu'),
+          subtitle: Text('${wilaya['deliveries_count'] ?? 0} livraisons'),
+          trailing: Text(
+            '${NumberFormat('#,###').format(wilaya['revenue'] ?? 0)} DZD',
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Colors.green,
+            ),
           ),
         );
       },
     );
   }
 
-  Widget _buildFAB() {
-    return FloatingActionButton.extended(
-      onPressed: () {
-        showModalBottomSheet(
-          context: context,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          isScrollControlled: true,
-          builder: (context) => SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+  Widget _buildTopDistributorsTab() {
+    final distributors = _topDistributors?['top_distributors'] ?? [];
+
+    if (distributors.isEmpty) {
+      return const Center(
+        child: Text('Aucun distributeur trouvé'),
+      );
+    }
+
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: distributors.length,
+      itemBuilder: (context, index) {
+        final distributor = distributors[index];
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: ListTile(
+            leading: CircleAvatar(
+              backgroundColor: _getRankColor(index),
+              child: Text(
+                '${index + 1}',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+            title: Text(distributor['name'] ?? 'Distributeur'),
+            subtitle: Text(
+              'Wilaya: ${distributor['wilaya'] ?? 'N/A'}\n'
+                  '${distributor['total_deliveries'] ?? 0} livraisons',
+            ),
+            trailing: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                const Padding(
-                  padding: EdgeInsets.all(16.0),
-                  child: Text(
-                    'Actions Rapides',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                Text(
+                  '${NumberFormat('#,###').format(distributor['total_revenue'] ?? 0)} DZD',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green,
                   ),
                 ),
-                const Divider(),
-                ListTile(
-                  leading: const Icon(Icons.add_shopping_cart, color: Colors.blue),
-                  title: const Text('Nouvelle Livraison'),
-                  subtitle: const Text('Avec géolocalisation GPS'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => const AddDeliveryScreen()),
-                    );
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.school, color: Colors.purple),
-                  title: const Text('Ajouter une École'),
-                  subtitle: const Text('Nouveau point de distribution'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => const AddSchoolScreen()),
-                    );
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.payments, color: Colors.teal),
-                  title: const Text('Enregistrer un Paiement'),
-                  subtitle: const Text('Suivi des encaissements'),
-                  onTap: () {
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (context) => const AddPaymentScreen()),
-                    );
-                  },
-                ),
-                const SizedBox(height: 20),
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16.0),
-                  child: TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Fermer'),
+                Text(
+                  '${distributor['payment_rate']?.toStringAsFixed(1) ?? '0'}% payé',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade600,
                   ),
                 ),
               ],
@@ -666,31 +466,276 @@ class _DistributorDashboardScreenState extends State<DistributorDashboardScreen>
           ),
         );
       },
-      label: const Text('Nouvelle Action'),
-      icon: const Icon(Icons.add),
-      backgroundColor: Colors.blue.shade600,
-      foregroundColor: Colors.white,
     );
   }
 
-  // Helper methods
-  int _safeParseInt(dynamic value) {
-    if (value == null) return 0;
-    if (value is int) return value;
-    if (value is String) return int.tryParse(value) ?? 0;
-    if (value is num) return value.toInt();
-    return 0;
+  Widget _buildTopSchoolsTab() {
+    final schools = _topSchools?['top_schools'] ?? [];
+
+    if (schools.isEmpty) {
+      return const Center(
+        child: Text('Aucune école trouvée'),
+      );
+    }
+
+    return ListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: schools.length,
+      itemBuilder: (context, index) {
+        final school = schools[index];
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: ListTile(
+            leading: const Icon(Icons.school, color: Colors.blue),
+            title: Text(school['name'] ?? 'École'),
+            subtitle: Text(
+              '${school['wilaya'] ?? ''} - ${school['manager'] ?? ''}',
+            ),
+            trailing: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  '${school['total_deliveries'] ?? 0} liv.',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  '${NumberFormat('#,###').format(school['total_amount'] ?? 0)} DZD',
+                  style: const TextStyle(
+                    color: Colors.green,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
-  double _safeParseDouble(dynamic value) {
-    if (value == null) return 0.0;
-    if (value is double) return value;
-    if (value is String) return double.tryParse(value) ?? 0.0;
-    if (value is num) return value.toDouble();
-    return 0.0;
+  Color _getRankColor(int rank) {
+    switch (rank) {
+      case 0: return Colors.amber;
+      case 1: return Colors.grey.shade400;
+      case 2: return Colors.orange.shade300;
+      default: return Colors.blue.shade300;
+    }
   }
 
-  String _formatDate(DateTime date) {
-    return '${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year}';
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return _buildLoadingScreen();
+    }
+
+    if (_errorMessage != null) {
+      return _buildErrorScreen();
+    }
+
+    return DefaultTabController(
+      length: 4,
+      child: Scaffold(
+        backgroundColor: Colors.grey.shade100,
+        body: NestedScrollView(
+          headerSliverBuilder: (context, innerBoxIsScrolled) {
+            return [
+              SliverAppBar(
+                expandedHeight: 300,
+                floating: false,
+                pinned: true,
+                flexibleSpace: FlexibleSpaceBar(
+                  background: _buildDashboardHeader(),
+                ),
+                bottom: PreferredSize(
+                  preferredSize: const Size.fromHeight(50),
+                  child: Container(
+                    color: Colors.white,
+                    child: TabBar(
+                      indicatorColor: Colors.purple,
+                      labelColor: Colors.purple,
+                      unselectedLabelColor: Colors.grey,
+                      tabs: const [
+                        Tab(icon: Icon(Icons.dashboard), text: 'Vue d\'ensemble'),
+                        Tab(icon: Icon(Icons.map), text: 'Wilayas'),
+                        Tab(icon: Icon(Icons.people), text: 'Distributeurs'),
+                        Tab(icon: Icon(Icons.school), text: 'Écoles'),
+                      ],
+                    ),
+                  ),
+                ),
+                actions: [
+                  IconButton(
+                    icon: const Icon(Icons.person),
+                    onPressed: () => _showProfileDialog(context, widget.user),
+                    tooltip: 'Mon Profil',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.refresh),
+                    onPressed: _loadDashboardData,
+                    tooltip: 'Rafraîchir',
+                  ),
+                ],
+              ),
+            ];
+          },
+          body: TabBarView(
+            children: [
+              _buildOverviewTab(),
+              _buildWilayaStatsTab(),
+              _buildTopDistributorsTab(),
+              _buildTopSchoolsTab(),
+            ],
+          ),
+        ),
+        floatingActionButton: FloatingActionButton.extended(
+          onPressed: () {
+            // Action d'administration
+            _showAdminMenu(context);
+          },
+          icon: const Icon(Icons.menu),
+          label: const Text('Actions'),
+          backgroundColor: Colors.purple.shade700,
+        ),
+      ),
+    );
+  }
+
+  void _showProfileDialog(BuildContext context, User? user) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Mon Profil'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (user != null) ...[
+                _buildProfileItem('Nom', user.name),
+                _buildProfileItem('Email', user.email ?? 'Non défini'),
+                _buildProfileItem('Téléphone', user.phone ?? 'Non défini'),
+                _buildProfileItem('Wilaya', user.wilaya ?? 'Non définie'),
+                _buildProfileItem('Rôle', user.role ?? 'admin'),
+              ] else ...[
+                const Text('Aucune information de profil disponible'),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Fermer'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProfileItem(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text(
+              '$label:',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(value),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAdminMenu(BuildContext context) {
+    final user = widget.user;
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    const Text(
+                      'Actions Administrateur',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Connecté en tant que: ${user?.name ?? 'Admin'}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.add_circle, color: Colors.blue),
+                title: const Text('Ajouter un Distributeur'),
+                onTap: () {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Fonctionnalité à implémenter')),
+                  );
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.school, color: Colors.green),
+                title: const Text('Gérer les Écoles'),
+                onTap: () {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Fonctionnalité à implémenter')),
+                  );
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.bar_chart, color: Colors.orange),
+                title: const Text('Générer un Rapport'),
+                onTap: () {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Fonctionnalité à implémenter')),
+                  );
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.person, color: Colors.purple),
+                title: const Text('Mon Profil'),
+                subtitle: Text(user?.email ?? ''),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showProfileDialog(context, user);
+                },
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        );
+      },
+    );
   }
 }

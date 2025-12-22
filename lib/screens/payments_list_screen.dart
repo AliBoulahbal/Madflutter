@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:madaure/main.dart';
+import 'package:madaure/models/payment.dart';
 import 'package:madaure/widgets/loading_widget.dart';
-import 'add_payment_screen.dart'; // Assurez-vous que ce fichier existe
+import 'add_payment_screen.dart';
 
 class PaymentsListScreen extends StatefulWidget {
   const PaymentsListScreen({super.key});
@@ -11,9 +12,8 @@ class PaymentsListScreen extends StatefulWidget {
 }
 
 class _PaymentsListScreenState extends State<PaymentsListScreen> {
-  List<Map<String, dynamic>> _payments = [];
+  List<Payment> _payments = [];
   bool _isLoading = true;
-  String? _errorMessage;
 
   @override
   void initState() {
@@ -22,165 +22,116 @@ class _PaymentsListScreenState extends State<PaymentsListScreen> {
   }
 
   Future<void> _loadPayments() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-
+    setState(() => _isLoading = true);
     try {
-      final paymentsData = await apiService.fetchPayments();
+      final data = await apiService.fetchPayments();
       setState(() {
-        _payments = paymentsData;
+        _payments = data;
         _isLoading = false;
       });
     } catch (e) {
-      setState(() {
-        _errorMessage = 'Erreur de chargement des paiements: $e';
-        _isLoading = false;
-      });
+      print('Error loading payments: $e');
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erreur de chargement: $e')),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Historique des Paiements'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadPayments,
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('Historique des Paiements')),
       body: _isLoading
-          ? const LoadingWidget(message: 'Chargement des paiements...')
+          ? const LoadingWidget(message: 'Chargement...')
           : _payments.isEmpty
-          ? Center(
+          ? const Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.payments, size: 60, color: Colors.grey),
-            const SizedBox(height: 20),
-            const Text(
-              'Aucun paiement enregistré',
-              style: TextStyle(fontSize: 18, color: Colors.grey),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  // CORRECTION: Enlever const ici
-                  MaterialPageRoute(builder: (context) => AddPaymentScreen()),
-                );
-              },
-              child: const Text('Ajouter un paiement'),
-            ),
+            Icon(Icons.payments, size: 60, color: Colors.grey),
+            SizedBox(height: 16),
+            Text('Aucun paiement enregistré'),
           ],
         ),
       )
-          : RefreshIndicator(
-        onRefresh: _loadPayments,
-        child: ListView.builder(
-          padding: const EdgeInsets.all(16.0),
-          itemCount: _payments.length,
-          itemBuilder: (context, index) {
-            final payment = _payments[index];
-            return _buildPaymentCard(payment, index);
-          },
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPaymentCard(Map<String, dynamic> payment, int index) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      elevation: 2,
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: Colors.green.shade100,
-          child: Icon(
-            _getPaymentMethodIcon(payment['method'] ?? 'cash'),
-            color: Colors.green,
-          ),
-        ),
-        title: Text(
-          'Paiement #${index + 1}',
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const SizedBox(height: 4),
-            Text('Méthode: ${payment['method'] ?? 'Non spécifié'}'),
-            if (payment['reference'] != null) Text('Référence: ${payment['reference']}'),
-            Text('Date: ${payment['payment_date'] ?? payment['date'] ?? 'Non spécifiée'}'),
-          ],
-        ),
-        trailing: Text(
-          '${payment['amount']} DZD',
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.green),
-        ),
-        onTap: () {
-          _showPaymentDetails(payment);
+          : ListView.builder(
+        itemCount: _payments.length,
+        itemBuilder: (context, index) {
+          final p = _payments[index];
+          return Card(
+            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: ListTile(
+              leading: const Icon(Icons.payment, color: Colors.green),
+              title: Text('${p.amount.toStringAsFixed(2)} DZD'),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Date: ${p.paymentDate}'),
+                  Text('Mode: ${_formatMethod(p.method)}'),
+                  if (p.status != null && p.status!.isNotEmpty)
+                    Text('Statut: ${p.status}'),
+                ],
+              ),
+              trailing: Icon(
+                _getMethodIcon(p.method),
+                color: _getMethodColor(p.method),
+              ),
+            ),
+          );
         },
       ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () async {
+          final result = await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const AddPaymentScreen())
+          );
+          if (result == true) {
+            _loadPayments();
+          }
+        },
+        child: const Icon(Icons.add),
+      ),
     );
   }
 
-  IconData _getPaymentMethodIcon(String method) {
-    switch (method.toLowerCase()) {
+  String _formatMethod(String method) {
+    switch (method) {
+      case 'cash':
+        return 'Espèce';
+      case 'check':
+        return 'Chèque';
+      case 'bank_transfer':
+        return 'Virement';
+      default:
+        return method;
+    }
+  }
+
+  IconData _getMethodIcon(String method) {
+    switch (method) {
       case 'cash':
         return Icons.money;
       case 'check':
         return Icons.description;
       case 'bank_transfer':
         return Icons.account_balance;
-      case 'mobile_money':
-        return Icons.phone_android;
       default:
-        return Icons.payments;
+        return Icons.payment;
     }
   }
 
-  void _showPaymentDetails(Map<String, dynamic> payment) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Détails du paiement'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _detailRow('Montant', '${payment['amount']} DZD'),
-            _detailRow('Méthode', payment['method'] ?? 'Non spécifié'),
-            _detailRow('Date', payment['payment_date'] ?? payment['date'] ?? 'Non spécifiée'),
-            if (payment['reference'] != null) _detailRow('Référence', payment['reference']),
-            if (payment['delivery_id'] != null) _detailRow('Livraison ID', payment['delivery_id'].toString()),
-            if (payment['note'] != null) _detailRow('Note', payment['note']),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Fermer'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _detailRow(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
-      child: Row(
-        children: [
-          Text('$label: ', style: const TextStyle(fontWeight: FontWeight.bold)),
-          Expanded(child: Text(value)),
-        ],
-      ),
-    );
+  Color _getMethodColor(String method) {
+    switch (method) {
+      case 'cash':
+        return Colors.green;
+      case 'check':
+        return Colors.blue;
+      case 'bank_transfer':
+        return Colors.purple;
+      default:
+        return Colors.grey;
+    }
   }
 }
